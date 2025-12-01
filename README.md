@@ -1,0 +1,2 @@
+- Vamos usar MySQL para fazer um DDBMS (DBMS Distribuído)
+-
