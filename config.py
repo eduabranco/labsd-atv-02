@@ -9,9 +9,9 @@ NODES = {
 }
 
 DB_CONFIG = {
-    'user': 'root',          # O usuário que criamos
-    'password': 'password', # A senha definida no SQL acima
-    'host': '127.0.0.1',         # Use IP explícito em vez de 'localhost' para forçar TCP
-    'database': 'dist_db',
-    'port': 3306                 # Garante a porta padrão
+    'user': 'root',
+    'password': 'password',  
+    'unix_socket': '/var/run/mysqld/mysqld.sock', # <--- ADICIONE ISTO
+    'host': '127.0.0.1',           # Usando IP ao invés de 'localhost' para forçar TCP
+    'database': 'dist_db'
 }
