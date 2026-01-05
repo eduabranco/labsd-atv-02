@@ -1,5 +1,14 @@
 # Usando MySQL para fazer um DDBMS (SGBD Distribuído)
 
+## Arquitetura da Solução
+
+* **Topologia:** **Peer-to-Peer com um Líder (Coordenador) dinâmico.**
+* **Comunicação:** **Sockets TCP (para confiabilidade).**
+* **Protocolo:** **Mensagens JSON contendo cabeçalhos (tipo, origem) e payload, assinadas com MD5 (Checksum).**
+* **Consistência (ACID):** **Implementação simplificada do** **Two-Phase Commit (2PC)**. O Líder recebe a escrita, solicita "Prepare" a todos, se todos derem OK, envia "Commit".
+* **Eleição:** **Algoritmo** **Bully** **(o nó com maior ID/IP ativo assume se o líder falhar).**
+* **Banco de Dados:** **MySQL (cada nó tem sua instância local).**
+
 ## Como Testar
 
 * **Configuração de Rede:**
