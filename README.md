@@ -39,6 +39,7 @@ CREATE TABLE usuarios (id INT AUTO_INCREMENT PRIMARY KEY, nome VARCHAR(100), ema
 
   * **Certifique-se de que o MySQL está rodando e a tabela em `dist_db.sql` foi criada.**
   * **Se for testar em uma única máquina, abra 3 terminais.**
+  * **Caso for rodar em mais de uma máquina, pegue o endereço IP de cada máquina e configure-asa na constante `NODES` em `config.py.`**
 * **Iniciar os Nós:**
 
   * **Terminal 1:** **python middleware.py 1**
