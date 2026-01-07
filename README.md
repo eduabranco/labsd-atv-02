@@ -1,5 +1,27 @@
 # Usando MySQL para fazer um DDBMS (SGBD Distribuído)
 
+## Pré-requisitos
+
+**Instale o conector do MySQL:**
+
+**code**Bash
+
+```
+pip install mysql-connector-python
+```
+
+**Crie um banco de dados chamado** **dist_db** **e uma tabela de teste em** **todas** **as máquinas (nós):**
+
+**code**SQL
+
+```
+CREATE DATABASE dist_db;
+USE dist_db;
+CREATE TABLE usuarios (id INT AUTO_INCREMENT PRIMARY KEY, nome VARCHAR(100), email VARCHAR(100));
+```
+
+---
+
 ## Arquitetura da Solução
 
 * **Topologia:** **Peer-to-Peer com um Líder (Coordenador) dinâmico.**
@@ -8,6 +30,8 @@
 * **Consistência (ACID):** **Implementação simplificada do** **Two-Phase Commit (2PC)**. O Líder recebe a escrita, solicita "Prepare" a todos, se todos derem OK, envia "Commit".
 * **Eleição:** **Algoritmo** **Bully** **(o nó com maior ID/IP ativo assume se o líder falhar).**
 * **Banco de Dados:** **MySQL (cada nó tem sua instância local).**
+
+---
 
 ## Como Testar
 
