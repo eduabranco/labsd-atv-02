@@ -4,9 +4,9 @@
 import os
 
 NODES = {
-    1: ('192.168.86.33', 5001), # Máquina 1
-    2: ('192.168.86.28', 5002), # Máquina 2 (Simulando localhost com portas diferentes)
-    3: ('192.168.86.120', 5003)  # Máquina 3
+    1: ('127.0.0.1', 5001), # Máquina 1
+    2: ('127.0.0.1', 5002), # Máquina 2 (Simulando localhost com portas diferentes)
+    3: ('127.0.0.1', 5003)  # Máquina 3
 }
 
 # Database Configuration with multiple fallback options

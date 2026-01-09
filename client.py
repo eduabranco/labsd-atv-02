@@ -28,6 +28,10 @@ def send_query(query):
         s.sendall(json.dumps(msg).encode())
         
         resp = s.recv(4096).decode()
+        if not resp:
+            s.close()
+            return {'status': 'error', 'msg': 'No response from server'}
+        
         data = json.loads(resp)
         s.close()
         return data
@@ -43,6 +47,10 @@ def main():
         if query.lower() == 'sair': break
         
         result = send_query(query)
+        
+        if not result:
+            print("[Erro] No response received from server")
+            continue
         
         if result.get('status') == 'success':
             print(f"[Sucesso] Executado no Nó: {result.get('node')}")
