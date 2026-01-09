@@ -6,7 +6,7 @@ __pycache__/
 *.pyc
 *.py[cod]
 *$py.class
-
+temp/
 # Database Configuration (contains credentials)
 config_db.py
 .env
