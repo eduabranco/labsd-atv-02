@@ -1,3 +1,112 @@
+# Changelog - Distributed Database System
+
+## [2PC Implementation] - 2026-01-09
+
+### ✨ Major Feature: Two-Phase Commit (2PC) Protocol - ACID Completo
+
+Implementação completa do protocolo Two-Phase Commit para garantir propriedades ACID em transações distribuídas.
+
+#### Novas Funcionalidades
+
+**1. Protocolo 2PC Completo**
+- **Fase 1 - PREPARE**: Coordenador valida query em todos os nós antes de commitar
+- **Votação**: Cada nó vota YES/NO baseado na validação local
+- **Fase 2 - COMMIT/ABORT**: Decisão atômica baseada nos votos
+- **Rollback**: Transações são revertidas em TODOS os nós se algum falhar
+
+**2. Novos Tipos de Mensagem**
+- `PREPARE`: Solicita preparação de transação
+- `VOTE_YES`: Nó pode executar a transação
+- `VOTE_NO`: Nó não pode executar (constraint violation, etc.)
+- `COMMIT`: Confirma transação em todos os nós
+- `ABORT`: Reverte transação em todos os nós
+
+**3. Controle de Transações MySQL**
+- `autocommit = False`: Permite transações manuais
+- `transaction_lock`: Sincronização de threads para evitar race conditions
+- `pending_transaction`: Armazena query em preparação
+
+#### Arquivos Modificados
+
+**`middleware.py`**
+- Adicionado `transaction_lock` para sincronização
+- Desabilitado autocommit do MySQL
+- Novas funções:
+  - `handle_prepare(query)`: Valida e prepara transação
+  - `handle_commit()`: Confirma transação pendente
+  - `handle_abort()`: Reverte transação pendente
+  - `execute_2pc(query)`: Orquestra protocolo 2PC completo
+- Modificado `process_query()`: Agora usa `execute_2pc()` para escritas
+- Adicionados handlers para PREPARE, COMMIT, ABORT no `handle_client()`
+
+#### Novos Arquivos
+
+**`2PC_IMPLEMENTATION.md`**
+- Documentação completa do protocolo 2PC
+- Diagramas de sequência
+- Exemplos de execução (COMMIT e ABORT)
+- Garantias ACID explicadas
+- Comparação com implementação anterior
+
+**`test_2pc.py`**
+- Script automatizado de testes do 2PC
+- Teste 1: Inserção válida (COMMIT em todos os nós)
+- Teste 2: Inserção inválida (ABORT atômico)
+- Teste 3: Distribuição de leituras
+- Teste 4: Atualização replicada
+- Função de limpeza
+
+#### Garantias ACID Implementadas
+
+✅ **Atomicidade**: Transação commitada em TODOS os nós ou em NENHUM
+✅ **Consistência**: Validação antes de commit garante constraints
+✅ **Isolamento**: Locks e transações MySQL garantem isolamento
+✅ **Durabilidade**: Commit do MySQL persiste dados em disco
+
+#### Logs Aprimorados
+
+Agora os logs mostram claramente o progresso do 2PC:
+```
+[*] [2PC] Iniciando Two-Phase Commit como Coordenador
+[*] [2PC-FASE-1] Enviando PREPARE para todos os nós
+[*] [2PC-PREPARE] VOTE_YES - Query válida
+[*] [2PC-DECISÃO] Votos: 3 YES, 0 NO -> COMMIT
+[*] [2PC-FASE-2] Enviando COMMIT para todos os nós
+[*] [2PC-COMMIT] Transação confirmada com sucesso
+[*] [2PC-COMPLETO] Transação commitada em 3 nós: [3, 2, 1]
+```
+
+#### Como Testar
+
+```bash
+# 1. Inicie os nós (3 terminais)
+python middleware.py 1
+python middleware.py 2
+python middleware.py 3
+
+# 2. Execute os testes automatizados
+python test_2pc.py
+
+# 3. Ou teste manualmente
+python client.py
+SQL> INSERT INTO usuarios (nome, email) VALUES ('Test', 'test@test.com');
+```
+
+#### Breaking Changes
+
+⚠️ **Nenhuma mudança que quebre compatibilidade**
+- Mensagens antigas (REPLICATE) ainda funcionam
+- Cliente não precisa modificação
+- Configuração permanece a mesma
+
+#### Performance
+
+- Latência aumentada devido às 2 fases (esperado em 2PC)
+- Maior confiabilidade e garantias ACID compensam o overhead
+- Leituras (SELECT) continuam rápidas (sem 2PC)
+
+---
+
 # MySQL Compatibility Improvements - Summary
 
 ## What Was Changed

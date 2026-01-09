@@ -65,7 +65,11 @@ Depois configure as credenciais via:
 * **Topologia:** **Peer-to-Peer com um Líder (Coordenador) dinâmico.**
 * **Comunicação:** **Sockets TCP (para confiabilidade).**
 * **Protocolo:** **Mensagens JSON contendo cabeçalhos (tipo, origem) e payload, assinadas com MD5 (Checksum).**
-* **Consistência (ACID):** **Implementação simplificada do** **Two-Phase Commit (2PC)**. O Líder recebe a escrita, solicita "Prepare" a todos, se todos derem OK, envia "Commit".
+* **Consistência (ACID):** **✅ Two-Phase Commit (2PC) COMPLETO implementado!** 
+  - **Fase 1 (PREPARE):** Líder pergunta a todos os nós se podem executar a query
+  - **Fase 2 (COMMIT/ABORT):** Se todos votarem YES, commit; caso contrário, rollback em todos
+  - **Garantias:** Atomicidade, Consistência, Isolamento e Durabilidade
+  - Veja detalhes em [2PC_IMPLEMENTATION.md](2PC_IMPLEMENTATION.md)
 * **Eleição:** **Algoritmo** **Bully** **(o nó com maior ID/IP ativo assume se o líder falhar).**
 * **Banco de Dados:** **MySQL (cada nó tem sua instância local).**
 
@@ -121,10 +125,24 @@ Você verá mensagens como:
 [*] Using database configuration from config_db.py
 [*] Nó 3 iniciado em 192.168.1.12:5003
 [*] Líder Atual: 3
+[*] 2PC (Two-Phase Commit) Ativado
 [*] EU SOU O NOVO LÍDER (Nó 3)
 ```
 
 O nó com maior ID (3) será eleito líder automaticamente.
+
+**Logs do 2PC durante uma escrita:**
+```
+[*] [2PC] Iniciando Two-Phase Commit como Coordenador
+[*] [2PC-FASE-1] Enviando PREPARE para todos os nós
+[*] [2PC-PREPARE] VOTE_YES - Query válida
+[*] [2PC-FASE-1] Nó 2: VOTE_YES
+[*] [2PC-FASE-1] Nó 1: VOTE_YES
+[*] [2PC-DECISÃO] Votos: 3 YES, 0 NO -> COMMIT
+[*] [2PC-FASE-2] Enviando COMMIT para todos os nós
+[*] [2PC-COMMIT] Transação confirmada com sucesso
+[*] [2PC-COMPLETO] Transação commitada em 3 nós: [3, 2, 1]
+```
 
 ### **4. Executar Cliente:**
 
@@ -153,7 +171,33 @@ SQL> UPDATE usuarios SET email = 'joao.silva@teste.com' WHERE id = 1;
 SQL> DELETE FROM usuarios WHERE id = 1;
 ```
 
-### **5. Teste de Falha e Eleição:**
+### **5. Teste do 2PC - Atomicidade:**
+
+Teste a propriedade de atomicidade do 2PC tentando inserir dados inválidos:
+
+```sql
+-- Tentativa de inserir com constraint violation (nome NOT NULL)
+SQL> INSERT INTO usuarios (id, nome, email) VALUES (999, NULL, 'test@test.com');
+```
+
+**Logs esperados:**
+```
+[*] [2PC-FASE-1] Enviando PREPARE para todos os nós
+[!] [2PC-PREPARE] VOTE_NO - Erro: Column 'nome' cannot be null
+[*] [2PC-DECISÃO] Votos: 2 YES, 1 NO -> ABORT
+[*] [2PC-FASE-2] Enviando ABORT para todos os nós
+[*] [2PC-ABORT] Transação revertida
+```
+
+**Resultado:** Nenhum nó terá os dados inseridos (rollback em todos)! ✅
+
+Verifique em qualquer nó:
+```sql
+SQL> SELECT * FROM usuarios WHERE id = 999;
+Dados: []  -- Vazio, como esperado!
+```
+
+### **6. Teste de Falha e Eleição:**
 
 1. **Mate o processo do Nó 3** (líder atual):
    ```

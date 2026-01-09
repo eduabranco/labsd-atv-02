@@ -17,9 +17,15 @@ class DDBNode:
         
         # Conexão com Banco de Dados Local
         self.db = mysql.connector.connect(**DB_CONFIG)
+        self.db.autocommit = False  # Desabilita autocommit para transações 2PC
+        
+        # Controle de transações 2PC
+        self.pending_transaction = None  # Armazena query em preparação
+        self.transaction_lock = threading.Lock()
         
         print(f"[*] Nó {self.node_id} iniciado em {self.host}:{self.port}")
         print(f"[*] Líder Atual: {self.leader_id}")
+        print(f"[*] 2PC (Two-Phase Commit) Ativado")
 
         # Threads
         threading.Thread(target=self.start_server, daemon=True).start()
@@ -95,8 +101,23 @@ class DDBNode:
                 print(f"[*] Query Recebida: {payload['query']}")
                 response = self.process_query(payload['query'])
 
+            elif msg_type == 'PREPARE':
+                # 2PC Fase 1: PREPARE - Valida se pode executar a query
+                print(f"[*] [2PC-PREPARE] Validando query: {payload['query']}")
+                response = self.handle_prepare(payload['query'])
+
+            elif msg_type == 'COMMIT':
+                # 2PC Fase 2: COMMIT - Confirma a transação
+                print(f"[*] [2PC-COMMIT] Commitando transação")
+                response = self.handle_commit()
+
+            elif msg_type == 'ABORT':
+                # 2PC Fase 2: ABORT - Reverte a transação
+                print(f"[*] [2PC-ABORT] Abortando transação")
+                response = self.handle_abort()
+
             elif msg_type == 'REPLICATE':
-                # Recebe ordem do líder para commitar alteração (2PC Fase 2 implícita)
+                # Retrocompatibilidade (não usado mais com 2PC completo)
                 print(f"[*] Replicando dados do Líder...")
                 self.execute_local_query(payload['query'])
 
@@ -109,7 +130,7 @@ class DDBNode:
 
     # --- LÓGICA DE BANCO DE DADOS E REPLICAÇÃO ---
 
-    def execute_local_query(self, query):
+    def execute_local_query(self, query, commit=True):
         """Executa no MySQL Local."""
         try:
             cursor = self.db.cursor(dictionary=True)
@@ -118,13 +139,71 @@ class DDBNode:
                 res = cursor.fetchall()
                 return {'status': 'success', 'data': res, 'node': self.node_id}
             else:
-                self.db.commit()
+                if commit:
+                    self.db.commit()
                 return {'status': 'success', 'data': 'Commited', 'node': self.node_id}
         except mysql.connector.Error as err:
             return {'status': 'error', 'msg': str(err)}
 
+    # --- 2PC (TWO-PHASE COMMIT) HANDLERS ---
+
+    def handle_prepare(self, query):
+        """
+        2PC Fase 1 - PREPARE: Valida a query e prepara para commit.
+        Retorna VOTE_YES se pode executar, VOTE_NO caso contrário.
+        """
+        with self.transaction_lock:
+            try:
+                # Tenta executar a query sem commit
+                cursor = self.db.cursor(dictionary=True)
+                cursor.execute(query)
+                
+                # Armazena a query pendente
+                self.pending_transaction = query
+                
+                print(f"[*] [2PC-PREPARE] VOTE_YES - Query válida")
+                return {'status': 'VOTE_YES', 'node': self.node_id}
+                
+            except mysql.connector.Error as err:
+                # Se houver erro, faz rollback e vota NÃO
+                self.db.rollback()
+                self.pending_transaction = None
+                print(f"[!] [2PC-PREPARE] VOTE_NO - Erro: {err}")
+                return {'status': 'VOTE_NO', 'msg': str(err), 'node': self.node_id}
+
+    def handle_commit(self):
+        """
+        2PC Fase 2 - COMMIT: Confirma a transação preparada.
+        """
+        with self.transaction_lock:
+            try:
+                if self.pending_transaction:
+                    self.db.commit()
+                    print(f"[*] [2PC-COMMIT] Transação confirmada com sucesso")
+                    self.pending_transaction = None
+                    return {'status': 'success', 'node': self.node_id}
+                else:
+                    return {'status': 'error', 'msg': 'Nenhuma transação pendente'}
+            except mysql.connector.Error as err:
+                self.db.rollback()
+                self.pending_transaction = None
+                return {'status': 'error', 'msg': str(err)}
+
+    def handle_abort(self):
+        """
+        2PC Fase 2 - ABORT: Reverte a transação preparada.
+        """
+        with self.transaction_lock:
+            try:
+                self.db.rollback()
+                print(f"[*] [2PC-ABORT] Transação revertida")
+                self.pending_transaction = None
+                return {'status': 'success', 'node': self.node_id}
+            except mysql.connector.Error as err:
+                return {'status': 'error', 'msg': str(err)}
+
     def process_query(self, query):
-        """Lógica de Distribuição (Load Balancer / Replication)."""
+        """Lógica de Distribuição (Load Balancer / Replication com 2PC)."""
         is_write = not query.strip().upper().startswith("SELECT")
         
         # 1. Se for LEITURA (SELECT), executa localmente (Balanceamento distribuído)
@@ -139,24 +218,79 @@ class DDBNode:
             msg = {'type': 'EXECUTE_QUERY', 'payload': {'query': query}}
             return self.send_message(leader_ip, leader_port, msg)
         
-        # Se eu SOU o líder, coordeno a replicação (ACID Simplificado)
+        # Se eu SOU o líder, coordeno o 2PC
         else:
-            print("[*] Sou o Líder. Iniciando Replicação...")
-            # Passo 1: Executa local
-            local_res = self.execute_local_query(query)
-            if local_res['status'] == 'error':
-                return local_res
-            
-            # Passo 2: Broadcast para todos os outros nós (Replicação)
-            success_count = 1
-            for nid, (nip, nport) in self.peers.items():
-                if nid in self.active_nodes:
-                    msg = {'type': 'REPLICATE', 'payload': {'query': query}}
-                    res = self.send_message(nip, nport, msg)
-                    if res and res.get('status') == 'success':
-                        success_count += 1
-            
-            return {'status': 'success', 'msg': f'Query replicada em {success_count} nós', 'node': self.node_id}
+            return self.execute_2pc(query)
+
+    def execute_2pc(self, query):
+        """
+        Executa Two-Phase Commit completo:
+        FASE 1 (PREPARE): Pergunta a todos se podem executar
+        FASE 2 (COMMIT/ABORT): Decide baseado nos votos
+        """
+        print(f"[*] [2PC] Iniciando Two-Phase Commit como Coordenador")
+        
+        # === FASE 1: PREPARE ===
+        print(f"[*] [2PC-FASE-1] Enviando PREPARE para todos os nós")
+        
+        # Primeiro, prepara localmente
+        local_prepare = self.handle_prepare(query)
+        if local_prepare['status'] != 'VOTE_YES':
+            print(f"[!] [2PC] Falha na preparação local. Abortando.")
+            return {'status': 'error', 'msg': 'Falha na preparação local', 'node': self.node_id}
+        
+        # Coleta votos dos participantes
+        votes = {'YES': 1, 'NO': 0}  # Líder já votou YES
+        failed_nodes = []
+        
+        for nid, (nip, nport) in self.peers.items():
+            if nid in self.active_nodes:
+                msg = {'type': 'PREPARE', 'payload': {'query': query}}
+                res = self.send_message(nip, nport, msg)
+                
+                if res and res.get('status') == 'VOTE_YES':
+                    votes['YES'] += 1
+                    print(f"[*] [2PC-FASE-1] Nó {nid}: VOTE_YES")
+                else:
+                    votes['NO'] += 1
+                    failed_nodes.append(nid)
+                    print(f"[!] [2PC-FASE-1] Nó {nid}: VOTE_NO")
+            else:
+                print(f"[!] [2PC-FASE-1] Nó {nid} inativo - não participará")
+        
+        # === DECISÃO ===
+        total_active = votes['YES'] + votes['NO']
+        decision = 'COMMIT' if votes['NO'] == 0 else 'ABORT'
+        
+        print(f"[*] [2PC-DECISÃO] Votos: {votes['YES']} YES, {votes['NO']} NO -> {decision}")
+        
+        # === FASE 2: COMMIT ou ABORT ===
+        print(f"[*] [2PC-FASE-2] Enviando {decision} para todos os nós")
+        
+        # Executa decisão localmente
+        if decision == 'COMMIT':
+            local_result = self.handle_commit()
+        else:
+            local_result = self.handle_abort()
+            return {'status': 'error', 'msg': f'Transação abortada. Nós com falha: {failed_nodes}', 'node': self.node_id}
+        
+        # Envia decisão para todos os participantes
+        committed_nodes = [self.node_id]
+        for nid, (nip, nport) in self.peers.items():
+            if nid in self.active_nodes:
+                msg = {'type': decision, 'payload': {}}
+                res = self.send_message(nip, nport, msg)
+                if res and res.get('status') == 'success':
+                    committed_nodes.append(nid)
+                    print(f"[*] [2PC-FASE-2] Nó {nid}: {decision} confirmado")
+        
+        print(f"[*] [2PC-COMPLETO] Transação commitada em {len(committed_nodes)} nós: {committed_nodes}")
+        return {
+            'status': 'success', 
+            'msg': f'2PC completo. Commitado em {len(committed_nodes)} nós', 
+            'nodes': committed_nodes,
+            'node': self.node_id
+        }
 
     # --- HEARTBEAT E ELEIÇÃO ---
 
