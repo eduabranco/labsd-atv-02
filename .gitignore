@@ -1,3 +1,26 @@
+# Python
 .venv
+venv/
+env/
 __pycache__/
 *.pyc
+*.py[cod]
+*$py.class
+
+# Database Configuration (contains credentials)
+config_db.py
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and results
+*.log
+client-results.txt
