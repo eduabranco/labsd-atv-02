@@ -38,7 +38,7 @@ class DDBNode:
         return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
     def send_message(self, target_ip, target_port, message):
-        """Envia mensagem via Socket TCP com Checksum."""
+        """Envia mensagem via Socket TCP com checksum de integridade."""
         message['source_id'] = self.node_id
         message['checksum'] = self.calculate_checksum(message['payload'])
         
@@ -51,10 +51,8 @@ class DDBNode:
                 response = s.recv(4096).decode()
                 return json.loads(response)
         except Exception as e:
-            # print(f"[!] Falha ao conectar com {target_ip}:{target_port} - {e}")
+            print(f"[!] Falha ao conectar com {target_ip}:{target_port} - {e}")
             return None
-
-    # --- SERVIDOR SOCKET (RECEBE REQUISIÇÕES) ---
 
     def start_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -115,11 +113,6 @@ class DDBNode:
                 # 2PC Fase 2: ABORT - Reverte a transação
                 print(f"[*] [2PC-ABORT] Abortando transação")
                 response = self.handle_abort()
-
-            elif msg_type == 'REPLICATE':
-                # Retrocompatibilidade (não usado mais com 2PC completo)
-                print(f"[*] Replicando dados do Líder...")
-                self.execute_local_query(payload['query'])
 
             client_socket.send(json.dumps(response).encode())
 
@@ -203,7 +196,7 @@ class DDBNode:
                 return {'status': 'error', 'msg': str(err)}
 
     def process_query(self, query):
-        """Lógica de Distribuição (Load Balancer / Replication com 2PC)."""
+        """Distribui queries: leituras locais, escritas via 2PC coordenado pelo líder."""
         is_write = not query.strip().upper().startswith("SELECT")
         
         # 1. Se for LEITURA (SELECT), executa localmente (Balanceamento distribuído)
@@ -219,8 +212,8 @@ class DDBNode:
             return self.send_message(leader_ip, leader_port, msg)
         
         # Se eu SOU o líder, coordeno o 2PC
-        else:
-            return self.execute_2pc(query)
+        
+        return self.execute_2pc(query)
 
     def execute_2pc(self, query):
         """
@@ -266,7 +259,7 @@ class DDBNode:
         
         # === FASE 2: COMMIT ou ABORT ===
         print(f"[*] [2PC-FASE-2] Enviando {decision} para todos os nós")
-        
+
         # Executa decisão localmente
         if decision == 'COMMIT':
             local_result = self.handle_commit()
@@ -322,14 +315,12 @@ class DDBNode:
             self.send_message(ip, port, msg)
 
     def heartbeat_loop(self):
-        """Informa que está ativo e verifica o líder."""
+        """Envia heartbeats periódicos e detecta falha do líder."""
         while self.running:
             # Enviar Heartbeat para todos (Gossip / Broadcast)
             msg = {'type': 'HEARTBEAT', 'payload': {'timestamp': time.time()}}
             
             # Resetar lista de ativos para verificar quem responde no próximo ciclo
-            # (Numa impl real, usaria timeout mais sofisticado)
-            current_active = list(self.active_nodes)
             self.active_nodes.clear() 
             self.active_nodes.add(self.node_id) # Eu estou ativo
 
@@ -343,7 +334,7 @@ class DDBNode:
                 # O Líder não respondeu neste ciclo
                 self.start_election()
 
-            time.sleep(5) # Periodo de 5 segundos
+            time.sleep(5)
 
 # --- ENTRY POINT ---
 if __name__ == "__main__":
