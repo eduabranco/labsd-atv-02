@@ -6,7 +6,7 @@ Sistema de banco de dados distribuído com replicação automática, eleição d
 
 ### 1. Instalar Dependências
 ```bash
-pip install mysql-connector-python
+pip install -r requirements.txt
 ```
 
 ### 2. Configurar MySQL
