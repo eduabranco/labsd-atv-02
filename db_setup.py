@@ -4,83 +4,91 @@ Database Setup Script for Distributed Database System
 Handles different MySQL authentication scenarios and automates user creation
 """
 
-import mysql.connector
-from mysql.connector import Error
-import sys
-import getpass
+from mysql.connector import MySQLConnection, Error, connect
+from getpass import getpass
 
-def try_connect(user='root', password=None, host='127.0.0.1', unix_socket=None):
+def try_connect(
+    user: str = "root",
+    password: str | None = None,
+    host: str = "127.0.0.1",
+    unix_socket: str | None = None
+) -> MySQLConnection | None:
     """Tenta conectar ao MySQL com as credenciais fornecidas. Retorna conexão ou None."""
     try:
         config = {
-            'user': user,
-            'host': host
+            "user": user,
+            "host": host
         }
-        
+
         if password is not None:
-            config['password'] = password
-            
-        if unix_socket:
-            config['unix_socket'] = unix_socket
-            
-        conn = mysql.connector.connect(**config)
-        return conn
+            config["password"] = password
+
+        if unix_socket is not None:
+            config["unix_socket"] = unix_socket
+
+        return connect(**config)
     except Error as e:
         return None
 
-def detect_mysql_connection():
+def detect_mysql_connection(
+) -> tuple[MySQLConnection | None, str | None, str | None, str | None]:
     """Detecta automaticamente configuração funcional do MySQL testando combinações comuns."""
     print("[*] Attempting to detect MySQL connection...")
-    
+
     # Common MySQL socket locations
-    socket_locations = [
-        '/var/run/mysqld/mysqld.sock',
-        '/tmp/mysql.sock',
-        '/var/lib/mysql/mysql.sock',
+    socket_locations: list[str | None] = [
+        "/var/run/mysqld/mysqld.sock",
+        "/tmp/mysql.sock",
+        "/var/lib/mysql/mysql.sock",
         None  # TCP only
     ]
-    
+
     # Try different authentication combinations
-    auth_configs = [
-        ('root', None),           # No password
-        ('root', ''),             # Empty password
-        ('root', 'password'),     # Password is 'password'
-        ('root', 'root'),         # Password is 'root'
+    auth_configs: list[tuple[str, str | None]] = [
+        ("root", None),           # No password
+        ("root", ""),             # Empty password
+        ("root", "password"),     # Password is "password"
+        ("root", "root"),         # Password is "root"
     ]
-    
+
     for sock in socket_locations:
         for user, pwd in auth_configs:
-            conn = try_connect(user=user, password=pwd, unix_socket=sock)
+            conn = try_connect(user = user, password = pwd, unix_socket = sock)
             if conn:
                 print(f"[✓] Successfully connected as '{user}' " + 
                       (f"with password '{pwd}'" if pwd else "without password") +
                       (f" via socket {sock}" if sock else " via TCP"))
                 return conn, user, pwd, sock
-    
+
     return None, None, None, None
 
-def create_database_and_user(conn, db_name='dist_db', app_user='ddb_user', app_password='ddb_pass'):
+def create_database_and_user(
+    conn: MySQLConnection,
+    db_name: str = 'dist_db',
+    app_user: str = 'ddb_user',
+    app_password: str = 'ddb_pass'
+) -> bool:
     """Cria banco de dados, usuário dedicado e tabela inicial com privilégios apropriados."""
     cursor = conn.cursor()
-    
+
     try:
         # Create database
         print(f"[*] Creating database '{db_name}'...")
         cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
         print(f"[✓] Database '{db_name}' created successfully")
-        
+
         # Create dedicated user
         print(f"[*] Creating user '{app_user}'@'localhost'...")
         cursor.execute(f"DROP USER IF EXISTS '{app_user}'@'localhost'")
         cursor.execute(f"CREATE USER '{app_user}'@'localhost' IDENTIFIED BY '{app_password}'")
         print(f"[✓] User '{app_user}' created successfully")
-        
+
         # Grant privileges
         print(f"[*] Granting privileges to '{app_user}'...")
         cursor.execute(f"GRANT ALL PRIVILEGES ON {db_name}.* TO '{app_user}'@'localhost'")
         cursor.execute("FLUSH PRIVILEGES")
         print(f"[✓] Privileges granted successfully")
-        
+
         # Create table
         print(f"[*] Creating table 'usuarios'...")
         cursor.execute(f"USE {db_name}")
@@ -92,53 +100,59 @@ def create_database_and_user(conn, db_name='dist_db', app_user='ddb_user', app_p
             )
         """)
         print(f"[✓] Table 'usuarios' created successfully")
-        
+
         conn.commit()
         return True
-        
+
     except Error as e:
         print(f"[!] Error during setup: {e}")
         return False
-    finally:
-        cursor.close()
 
-def save_config(user, password, socket_path, db_name='dist_db'):
+    finally: cursor.close()
+
+def save_config(
+    user: str | None,
+    password: str | None,
+    socket_path: str | None,
+    db_name: str = "dist_db"
+) -> None:
     """Salva credenciais MySQL em config_db.py para uso pela aplicação."""
     config_content = f"""# Database Configuration (Auto-generated by db_setup.py)
-# This file contains the working MySQL credentials
+    # This file contains the working MySQL credentials
 
-DB_CONFIG = {{
-    'user': '{user}',
-    'password': '{password if password else ''}',
-    'host': '127.0.0.1',
-    'database': '{db_name}'
-}}
-"""
-    
+    DB_CONFIG = {{
+        "user": "{user}",
+        "password": "{password if password else ""}",
+        "host": "127.0.0.1",
+        "database": "{db_name}"
+    }}
+    """
+
     if socket_path:
         # Insert socket path before closing brace
         config_content = config_content.replace(
-            "    'database': '" + db_name + "'\n}",
-            "    'database': '" + db_name + "',\n    'unix_socket': '" + socket_path + "'\n}"
+            f"    \"database\": \"{db_name}\"\n}}",
+            f"    \"database\": \"{db_name}\",\n    \"unix_socket\": \"{socket_path}\"\n}}"
         )
-    
+
     with open('config_db.py', 'w') as f:
         f.write(config_content)
-    
+
     print(f"[✓] Configuration saved to config_db.py")
 
-def interactive_setup():
+def interactive_setup(
+) -> tuple[MySQLConnection | None, str | None, str | None, str | None]:
     """Permite configuração manual interativa quando detecção automática falha."""
     print("\n=== Manual MySQL Configuration ===")
     user = input("MySQL username [root]: ").strip() or 'root'
-    password = getpass.getpass("MySQL password (press Enter for no password): ")
+    password = getpass("MySQL password (press Enter for no password): ")
     if not password:
         password = None
-        
+
     host = input("MySQL host [127.0.0.1]: ").strip() or '127.0.0.1'
     socket = input("MySQL socket path (press Enter to skip): ").strip() or None
-    
-    conn = try_connect(user=user, password=password, host=host, unix_socket=socket)
+
+    conn = try_connect(user, password, host, socket)
     if conn:
         print("[✓] Connection successful!")
         return conn, user, password, socket
@@ -151,33 +165,32 @@ def main():
     print("  Distributed Database System - MySQL Setup")
     print("=" * 60)
     print()
-    
+
     # Try automatic detection first
     conn, user, password, socket_path = detect_mysql_connection()
-    
+
     if not conn:
         print("[!] Automatic detection failed")
         response = input("Would you like to configure manually? (y/n): ")
         if response.lower() == 'y':
             conn, user, password, socket_path = interactive_setup()
-        
+
         if not conn:
             print("[!] Could not establish MySQL connection. Exiting.")
-            sys.exit(1)
-    
+            exit(1)
+
     # Ask if user wants to create a dedicated application user
     print()
     response = input("Create dedicated application user 'ddb_user'? (recommended) (y/n): ")
-    
+
     if response.lower() == 'y':
         app_user = input("Application username [ddb_user]: ").strip() or 'ddb_user'
-        app_password = getpass.getpass("Application password [ddb_pass]: ") or 'ddb_pass'
-        
-        if create_database_and_user(conn, app_user=app_user, app_password=app_password):
+        app_password = getpass("Application password [ddb_pass]: ") or 'ddb_pass'
+
+        if create_database_and_user(conn, app_user = app_user, app_password = app_password):
             # Save config with new user
             save_config(app_user, app_password, socket_path)
-            print()
-            print("[✓] Setup completed successfully!")
+            print("\n[✓] Setup completed successfully!")
             print(f"[*] Application will use user '{app_user}' to connect to database")
     else:
         # Create database with root user
@@ -198,15 +211,14 @@ def main():
             print(f"[!] Error: {e}")
         finally:
             cursor.close()
-        
+
         # Save config with root user
         save_config(user, password, socket_path)
-        print()
-        print("[✓] Setup completed successfully!")
+        print("\n[✓] Setup completed successfully!")
         print(f"[*] Application will use user '{user}' to connect to database")
-    
+
     conn.close()
-    
+
     print()
     print("=" * 60)
     print("  Next steps:")
@@ -215,5 +227,4 @@ def main():
     print("  3. Start the middleware: python middleware.py <NODE_ID>")
     print("=" * 60)
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
