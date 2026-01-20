@@ -5,6 +5,7 @@ Handles different MySQL authentication scenarios and automates user creation
 """
 
 from mysql.connector import MySQLConnection, Error, connect
+from mysql.connector.connection_cext import CMySQLConnection
 from getpass import getpass
 
 def try_connect(
@@ -12,7 +13,7 @@ def try_connect(
     password: str | None = None,
     host: str = "127.0.0.1",
     unix_socket: str | None = None
-) -> MySQLConnection | None:
+) -> MySQLConnection | CMySQLConnection | None:
     """Tenta conectar ao MySQL com as credenciais fornecidas. Retorna conexão ou None."""
     try:
         config = {
@@ -27,12 +28,12 @@ def try_connect(
             config["unix_socket"] = unix_socket
 
         conn = connect(**config)
-        if isinstance(conn, MySQLConnection): return conn
+        if isinstance(conn, (MySQLConnection, CMySQLConnection)): return conn
 
     except Error as e: return
 
 def detect_mysql_connection(
-) -> tuple[MySQLConnection | None, str | None, str | None, str | None]:
+) -> tuple[MySQLConnection | CMySQLConnection | None, str | None, str | None, str | None]:
     """Detecta automaticamente configuração funcional do MySQL testando combinações comuns."""
     print("[*] Attempting to detect MySQL connection...")
 
@@ -64,7 +65,7 @@ def detect_mysql_connection(
     return None, None, None, None
 
 def create_database_and_user(
-    conn: MySQLConnection,
+    conn: MySQLConnection | CMySQLConnection,
     db_name: str = 'dist_db',
     app_user: str = 'ddb_user',
     app_password: str = 'ddb_pass'
@@ -142,7 +143,7 @@ def save_config(
     print(f"[✓] Configuration saved to config_db.py")
 
 def interactive_setup(
-) -> tuple[MySQLConnection | None, str | None, str | None, str | None]:
+) -> tuple[MySQLConnection | CMySQLConnection | None, str | None, str | None, str | None]:
     """Permite configuração manual interativa quando detecção automática falha."""
     print("\n=== Manual MySQL Configuration ===")
     user = input("MySQL username [root]: ").strip() or 'root'
