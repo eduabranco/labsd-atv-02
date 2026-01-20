@@ -5,8 +5,8 @@ from hashlib import md5
 from config import NODES
 from typing import Any
 
-def calculate_checksum(data):
-    return md5(dumps(data, sort_keys=True).encode()).hexdigest()
+def calculate_checksum(data: dict[str, Any]) -> str:
+    return md5(dumps(data, sort_keys = True).encode()).hexdigest()
 
 def send_query(query: str) -> dict[str, Any]:
     # Escolhe um nó aleatório para Load Balancing inicial

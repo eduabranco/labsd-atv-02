@@ -18,8 +18,8 @@ class DDBNode:
         self.active_nodes = set()
 
         # Conexão com Banco de Dados Local
-        self.db = connect(**DB_CONFIG)
-        self.db.autocommit = False  # Desabilita autocommit para transações 2PC
+        db_config = {**DB_CONFIG, "autocommit": False}  # Desabilita autocommit para transações 2PC
+        self.db = connect(**db_config)
 
         # Controle de transações 2PC
         self.pending_transaction = None  # Armazena query em preparação
@@ -35,7 +35,7 @@ class DDBNode:
 
     # --- UTILITÁRIOS DE PROTOCOLO ---
 
-    def calculate_checksum(self, data: Any) -> str:
+    def calculate_checksum(self, data: dict[str, Any]) -> str:
         """Gera MD5 do conteúdo para garantir integridade."""
         return md5(dumps(data, sort_keys = True).encode()).hexdigest()
 

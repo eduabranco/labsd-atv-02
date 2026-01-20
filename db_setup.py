@@ -26,9 +26,10 @@ def try_connect(
         if unix_socket is not None:
             config["unix_socket"] = unix_socket
 
-        return connect(**config)
-    except Error as e:
-        return None
+        conn = connect(**config)
+        if isinstance(conn, MySQLConnection): return conn
+
+    except Error as e: return
 
 def detect_mysql_connection(
 ) -> tuple[MySQLConnection | None, str | None, str | None, str | None]:
