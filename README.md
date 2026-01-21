@@ -1,6 +1,6 @@
 # SGBD Distribuído com MySQL
 
-Sistema de banco de dados distribuído com replicação automática, eleição de líder e garantias ACID via protocolo Two-Phase Commit (2PC).
+Sistema de banco de dados distribuído com replicação automática, eleição de líder e garantias **ACID completas** via protocolo Two-Phase Commit (2PC).
 
 ## Quick Start
 
@@ -22,6 +22,10 @@ NODES = {
     2: ('192.168.1.11', 5002),
     3: ('192.168.1.12', 5003)
 }
+
+# Leituras consistentes (opcional)
+CONSISTENT_READS = False  # True = leituras via líder (slower, mais consistente)
+                          # False = leituras locais (faster, eventual consistency)
 ```
 
 ### 4. Iniciar Sistema
@@ -39,7 +43,11 @@ python client.py        # Cliente
 * **Consistência:** Two-Phase Commit (2PC) para garantias ACID
   - Fase 1 (PREPARE): Validação em todos os nós
   - Fase 2 (COMMIT/ABORT): Decisão atômica baseada em votação
+  - **Recovery Log**: Logging de decisões do coordenador para durabilidade
+  - **Timeout**: 30s para transações preparadas (previne deadlocks)
+* **Isolamento:** REPEATABLE READ (previne dirty reads e non-repeatable reads)
 * **Eleição:** Algoritmo Bully (maior ID assume como líder)
+* **Heartbeat:** 5 segundos (detecção rápida de falhas)
 * **Banco:** MySQL local em cada nó
 
 ## Uso do Cliente
@@ -57,6 +65,13 @@ SQL> DELETE FROM usuarios WHERE id = 1;
 2. Aguarde 5-10 segundos
 3. Observe eleição automática de novo líder nos logs
 4. Sistema continua operacional
+
+## Teste de Recovery
+
+1. Inicie uma transação e mate o coordenador durante a fase PREPARE
+2. Reinicie o nó
+3. Recovery automático irá abortar transações pendentes e limpar o log
+4. Verifique os arquivos `recovery_log_node_X.json` para ver o histórico
 
 ## Solução de Problemas
 

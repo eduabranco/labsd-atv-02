@@ -1,12 +1,14 @@
 from socket import socket, AF_INET, SOCK_STREAM
 from threading import Thread, Lock
-from json import loads, dumps
+from json import loads, dumps, dump, load
 from time import sleep, time
 from hashlib import md5
 from mysql.connector import Error, connect
-from config import NODES, DB_CONFIG
+from config import NODES, DB_CONFIG, CONSISTENT_READS
 from typing import Any
 from sys import argv
+from pathlib import Path
+from datetime import datetime
 
 class DDBNode:
     def __init__(self, node_id: int) -> None:
@@ -20,18 +22,96 @@ class DDBNode:
         # Conexão com Banco de Dados Local
         db_config = {**DB_CONFIG, "autocommit": False}  # Desabilita autocommit para transações 2PC
         self.db = connect(**db_config)
+        
+        # Define nível de isolamento para REPEATABLE READ (melhor consistência)
+        cursor = self.db.cursor()
+        cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        cursor.close()
 
         # Controle de transações 2PC
         self.pending_transaction = None  # Armazena query em preparação
         self.transaction_lock = Lock()
+        self.transaction_timeout = 30  # Timeout em segundos para transações preparadas
+        self.prepare_timestamp = None  # Timestamp da fase PREPARE
+        
+        # Recovery Log para durabilidade do coordenador
+        self.recovery_log_file = Path(f"recovery_log_node_{self.node_id}.json")
+        self.recovery_on_startup()
 
         print(f"[*] Nó {self.node_id} iniciado em {self.host}:{self.port}")
         print(f"[*] Líder Atual: {self.leader_id}")
         print(f"[*] 2PC (Two-Phase Commit) Ativado")
+        print(f"[*] Isolation Level: REPEATABLE READ")
+        print(f"[*] Transaction Timeout: {self.transaction_timeout}s")
 
         # Threads
         Thread(target = self.start_server, daemon = True).start()
         Thread(target = self.heartbeat_loop, daemon = True).start()
+        Thread(target = self.transaction_timeout_monitor, daemon = True).start()
+
+    # --- RECOVERY E DURABILIDADE ---
+
+    def recovery_on_startup(self) -> None:
+        """Recupera transações pendentes do log em caso de falha do coordenador."""
+        if not self.recovery_log_file.exists():
+            return
+            
+        try:
+            with open(self.recovery_log_file, 'r') as f:
+                log_entries = load(f)
+                
+            for entry in log_entries:
+                if entry.get("status") == "PREPARED":
+                    # Transação ficou pendente - abortar por segurança
+                    print(f"[!] [RECOVERY] Abortando transação pendente: {entry['query']}")
+                    self.db.rollback()
+                    
+            # Limpa o log após recuperação
+            self.recovery_log_file.unlink()
+            print(f"[*] [RECOVERY] Recovery completo")
+            
+        except Exception as e:
+            print(f"[!] [RECOVERY] Erro na recuperação: {e}")
+
+    def log_transaction_state(self, query: str, status: str, nodes: list[int] = None) -> None:
+        """Registra estado da transação para recuperação em caso de falha."""
+        try:
+            log_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "query": query,
+                "status": status,  # PREPARED, COMMITTED, ABORTED
+                "nodes": nodes or []
+            }
+            
+            # Lê log existente ou cria novo
+            log_entries = []
+            if self.recovery_log_file.exists():
+                with open(self.recovery_log_file, 'r') as f:
+                    log_entries = load(f)
+                    
+            log_entries.append(log_entry)
+            
+            # Escreve log atualizado
+            with open(self.recovery_log_file, 'w') as f:
+                dump(log_entries, f, indent=2)
+                
+        except Exception as e:
+            print(f"[!] Erro ao escrever recovery log: {e}")
+
+    def transaction_timeout_monitor(self) -> None:
+        """Monitora e aborta transações preparadas que excedem o timeout."""
+        while self.running:
+            sleep(5)  # Verifica a cada 5 segundos
+            
+            if self.pending_transaction and self.prepare_timestamp:
+                elapsed = time() - self.prepare_timestamp
+                if elapsed > self.transaction_timeout:
+                    print(f"[!] [TIMEOUT] Transação preparada excedeu timeout ({elapsed:.1f}s)")
+                    with self.transaction_lock:
+                        self.db.rollback()
+                        self.pending_transaction = None
+                        self.prepare_timestamp = None
+                        print(f"[*] [TIMEOUT] Transação abortada automaticamente")
 
     # --- UTILITÁRIOS DE PROTOCOLO ---
 
@@ -141,7 +221,10 @@ class DDBNode:
         try:
             cursor = self.db.cursor(dictionary = True)
             cursor.execute(query)
-            if query.strip().upper().startswith("SELECT"):
+            # Queries que retornam dados
+            query_upper = query.strip().upper()
+            read_commands = ("SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN")
+            if query_upper.startswith(read_commands):
                 res = cursor.fetchall()
                 return {"status": "success", "data": res, "node": self.node_id}
             else:
@@ -154,44 +237,54 @@ class DDBNode:
 
     def handle_prepare(self, query: str) -> dict[str, Any]:
         """
-        2PC Fase 1 - PREPARE: Valida a query e prepara para commit.
-        Retorna VOTE_YES se pode executar, VOTE_NO caso contrário.
+        2PC Fase 1 - PREPARE: Executa a query mas NÃO commita (mantém transação aberta).
+        Retorna VOTE_YES se executou com sucesso, VOTE_NO caso contrário.
+        Todos os nós executam a query na fase PREPARE para garantir replicação.
         """
         with self.transaction_lock:
             try:
-                # Tenta executar a query sem commit
+                # Executa a query mas NÃO commita (autocommit está desabilitado)
                 cursor = self.db.cursor(dictionary = True)
                 cursor.execute(query)
-
-                # Armazena a query pendente
+                
+                # Armazena a query pendente para poder fazer rollback se necessário
                 self.pending_transaction = query
+                self.prepare_timestamp = time()  # Registra timestamp para timeout
 
-                print(f"[*] [2PC-PREPARE] VOTE_YES - Query válida")
+                print(f"[*] [2PC-PREPARE] VOTE_YES - Query executada (não commitada)")
                 return {"status": "VOTE_YES", "node": self.node_id}
 
             except Error as err:
                 # Se houver erro, faz rollback e vota NÃO
                 self.db.rollback()
                 self.pending_transaction = None
+                self.prepare_timestamp = None
                 print(f"[!] [2PC-PREPARE] VOTE_NO - Erro: {err}")
                 return {"status": "VOTE_NO", "msg": str(err), "node": self.node_id}
 
     def handle_commit(self) -> dict[str, Any]:
         """
-        2PC Fase 2 - COMMIT: Confirma a transação preparada.
+        2PC Fase 2 - COMMIT: Commita a transação preparada.
+        Todos os nós commitam para garantir replicação dos dados.
         """
         with self.transaction_lock:
             try:
                 if self.pending_transaction:
+                    # Commita a transação que foi executada no PREPARE
                     self.db.commit()
-                    print(f"[*] [2PC-COMMIT] Transação confirmada com sucesso")
+                    print(f"[*] [2PC-COMMIT] Transação commitada com sucesso")
                     self.pending_transaction = None
+                    self.prepare_timestamp = None
                     return {"status": "success", "node": self.node_id}
                 else:
-                    return {"status": "error", "msg": "Nenhuma transação pendente"}
+                    # Sem transação pendente
+                    print(f"[!] [2PC-COMMIT] Nenhuma transação pendente para commitar")
+                    return {"status": "success", "node": self.node_id}
             except Error as err:
                 self.db.rollback()
                 self.pending_transaction = None
+                self.prepare_timestamp = None
+                print(f"[!] [2PC-COMMIT] Erro ao commitar: {err}")
                 return {"status": "error", "msg": str(err)}
 
     def handle_abort(self) -> dict[str, Any]:
@@ -203,17 +296,29 @@ class DDBNode:
                 self.db.rollback()
                 print(f"[*] [2PC-ABORT] Transação revertida")
                 self.pending_transaction = None
+                self.prepare_timestamp = None
                 return {"status": "success", "node": self.node_id}
             except Error as err:
                 return {"status": "error", "msg": str(err)}
 
     def process_query(self, query) -> dict[str, Any] | None:
-        """Distribui queries: leituras locais, escritas via 2PC coordenado pelo líder."""
-        is_write = not query.strip().upper().startswith("SELECT")
+        """Distribui queries: leituras locais (ou pelo líder se CONSISTENT_READS), escritas via 2PC coordenado pelo líder."""
+        query_upper = query.strip().upper()
+        # Identifica queries de leitura (SELECT, SHOW, DESCRIBE, EXPLAIN)
+        read_commands = ("SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN")
+        is_write = not query_upper.startswith(read_commands)
 
-        # 1. Se for LEITURA (SELECT), executa localmente (Balanceamento distribuído)
+        # 1. Se for LEITURA (SELECT, SHOW, etc.)
         if not is_write:
-            return self.execute_local_query(query)
+            # Se CONSISTENT_READS está habilitado, roteia pelo líder para leitura consistente
+            if CONSISTENT_READS and self.node_id != self.leader_id:
+                print(f"[*] [CONSISTENT_READ] Roteando leitura para o Líder {self.leader_id}")
+                leader_ip, leader_port = NODES[self.leader_id]
+                msg = {"type": "EXECUTE_QUERY", "payload": {"query": query}}
+                return self.send_message(leader_ip, leader_port, msg)
+            else:
+                # Executa localmente (balanceamento distribuído)
+                return self.execute_local_query(query)
 
         # 2. Se for ESCRITA (INSERT/UPDATE/DELETE)
         # Se eu não sou o líder, encaminho para o líder
@@ -232,20 +337,16 @@ class DDBNode:
         Executa Two-Phase Commit completo:
         FASE 1 (PREPARE): Pergunta a todos se podem executar
         FASE 2 (COMMIT/ABORT): Decide baseado nos votos
+        Apenas o coordenador executa a escrita; participantes apenas validam.
         """
-        print(f"[*] [2PC] Iniciando Two-Phase Commit como Coordenador")
-
+        print(f"[*] [2PC] Iniciando Two-Phase Commit como Coordenador")        
+        # Log início da transação
+        self.log_transaction_state(query, "STARTED")
         # === FASE 1: PREPARE ===
         print(f"[*] [2PC-FASE-1] Enviando PREPARE para todos os nós")
 
-        # Primeiro, prepara localmente
-        local_prepare = self.handle_prepare(query)
-        if local_prepare["status"] != "VOTE_YES":
-            print(f"[!] [2PC] Falha na preparação local. Abortando.")
-            return {"status": "error", "msg": "Falha na preparação local", "node": self.node_id}
-
-        # Coleta votos dos participantes
-        votes = {"YES": 1, "NO": 0}  # Líder já votou YES
+        # Coleta votos dos participantes (não inclui o coordenador na fase PREPARE)
+        votes = {"YES": 0, "NO": 0}
         failed_nodes = []
 
         for nid, (nip, nport) in self.peers.items():
@@ -263,6 +364,18 @@ class DDBNode:
             else:
                 print(f"[!] [2PC-FASE-1] Nó {nid} inativo - não participará")
 
+        # === COORDENADOR TAMBÉM PREPARA ===
+        # O coordenador também deve executar a query (sem commit) como os participantes
+        coord_prepare_result = self.handle_prepare(query)
+        if coord_prepare_result["status"] != "VOTE_YES":
+            votes["NO"] += 1
+            print(f"[!] [2PC-FASE-1] Coordenador falhou no PREPARE: {coord_prepare_result.get('msg', '')}")
+        else:
+            # Log estado PREPARED para durabilidade
+            participating_nodes = [nid for nid in self.peers.keys() if nid in self.active_nodes]
+            participating_nodes.append(self.node_id)
+            self.log_transaction_state(query, "PREPARED", participating_nodes)
+
         # === DECISÃO ===
         decision = "COMMIT" if votes["NO"] == 0 else "ABORT"
 
@@ -271,27 +384,47 @@ class DDBNode:
         # === FASE 2: COMMIT ou ABORT ===
         print(f"[*] [2PC-FASE-2] Enviando {decision} para todos os nós")
 
-        # Executa decisão localmente
-        if decision == "COMMIT":
-            local_result = self.handle_commit()
-        else:
-            local_result = self.handle_abort()
+        if decision == "ABORT":
+            # Log decisão de abortar
+            self.log_transaction_state(query, "ABORTED")
+            # Aborta no coordenador também
+            self.handle_abort()
+            # Notifica participantes para abortar
+            for nid, (nip, nport) in self.peers.items():
+                if nid in self.active_nodes:
+                    msg = {"type": "ABORT", "payload": {}}
+                    self.send_message(nip, nport, msg)
             return {"status": "error", "msg": f"Transação abortada. Nós com falha: {failed_nodes}", "node": self.node_id}
 
-        # Envia decisão para todos os participantes
-        committed_nodes = [self.node_id]
+        # Envia COMMIT para todos os participantes
+        committed_nodes = []
         for nid, (nip, nport) in self.peers.items():
             if nid in self.active_nodes:
-                msg = {"type": decision, "payload": {}}
+                msg = {"type": "COMMIT", "payload": {}}
                 res = self.send_message(nip, nport, msg)
                 if res and res.get("status") == "success":
                     committed_nodes.append(nid)
-                    print(f"[*] [2PC-FASE-2] Nó {nid}: {decision} confirmado")
+                    print(f"[*] [2PC-FASE-2] Nó {nid}: COMMIT confirmado")
+                else:
+                    print(f"[!] [2PC-FASE-2] Nó {nid}: Falha no COMMIT")
 
-        print(f"[*] [2PC-COMPLETO] Transação commitada em {len(committed_nodes)} nós: {committed_nodes}")
+        # Coordenador também commita
+        coord_commit_result = self.handle_commit()
+        if coord_commit_result["status"] == "success":
+            committed_nodes.append(self.node_id)
+            print(f"[*] [2PC-FASE-2] Coordenador: COMMIT confirmado")
+        else:
+            print(f"[!] [2PC-FASE-2] Coordenador: Falha no COMMIT")
+            # Se o coordenador falhar no commit, isso é um problema grave
+            return {"status": "error", "msg": "Coordenador falhou no COMMIT", "node": self.node_id}
+
+        # Log sucesso da transação
+        self.log_transaction_state(query, "COMMITTED", committed_nodes)
+        
+        print(f"[*] [2PC-COMPLETO] Query replicada e commitada em {len(committed_nodes)} nós: {committed_nodes}")
         return {
             "status": "success", 
-            "msg": f"2PC completo. Commitado em {len(committed_nodes)} nós", 
+            "msg": f"2PC completo. Query replicada em {len(committed_nodes)} nós", 
             "nodes": committed_nodes,
             "node": self.node_id
         }
@@ -344,7 +477,7 @@ class DDBNode:
                 # O Líder não respondeu neste ciclo
                 self.start_election()
 
-            sleep(300)  # 5 minutos entre heartbeats
+            sleep(5)  # 5 segundos entre heartbeats (reduzido de 300s para detecção rápida de falhas)
 
 # --- ENTRY POINT ---
 if __name__ == "__main__":

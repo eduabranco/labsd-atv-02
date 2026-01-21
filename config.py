@@ -10,6 +10,12 @@ NODES: dict[int, tuple[str, int]] = {
     3: ("127.0.0.1", 5003)  # Máquina 3
 }
 
+# Configurações ACID
+# CONSISTENT_READS: Se True, queries SELECT também são roteadas pelo líder para garantir
+# leitura dos dados mais recentes (stronger consistency, menor performance)
+# Se False, leituras são executadas localmente (eventual consistency, melhor performance)
+CONSISTENT_READS = False  # Altere para True se precisar de leituras fortemente consistentes
+
 # Database Configuration with multiple fallback options
 # Priority: 1. Environment variables, 2. config_db.py (auto-generated), 3. Default values
 
