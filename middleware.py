@@ -94,7 +94,7 @@ class DDBNode:
 
                 case "ELECTION":
                     # Algoritmo Bully: Se receber de ID menor, eu respondo OK e inicio eleição
-                    print(f"[*] Recebido Eleição de {msg["source_id"]}")
+                    print(f"[*] Recebido Eleição de {msg['source_id']}")
                     response["status"] = "ALIVE"
 
                 case "VICTORY":
@@ -102,12 +102,12 @@ class DDBNode:
                     print(f"[*] Novo Líder Eleito: {self.leader_id}")
 
                 case "EXECUTE_QUERY":
-                    print(f"[*] Query Recebida: {payload["query"]}")
+                    print(f"[*] Query Recebida: {payload['query']}")
                     response = self.process_query(payload["query"])
 
                 case "PREPARE":
                     # 2PC Fase 1: PREPARE - Valida se pode executar a query
-                    print(f"[*] [2PC-PREPARE] Validando query: {payload["query"]}")
+                    print(f"[*] [2PC-PREPARE] Validando query: {payload['query']}")
                     response = self.handle_prepare(payload["query"])
 
                 case "COMMIT":
@@ -266,7 +266,7 @@ class DDBNode:
         # === DECISÃO ===
         decision = "COMMIT" if votes["NO"] == 0 else "ABORT"
 
-        print(f"[*] [2PC-DECISÃO] Votos: {votes["YES"] = }, {votes["NO"] = } -> {decision}")
+        print(f"[*] [2PC-DECISÃO] Votos: {votes['YES'] = }, {votes['NO'] = } -> {decision}")
 
         # === FASE 2: COMMIT ou ABORT ===
         print(f"[*] [2PC-FASE-2] Enviando {decision} para todos os nós")
