@@ -43,10 +43,25 @@ def send_query(query: str) -> dict[str, Any]:
 def main():
     print("=== DDB Client Interface ===")
     print("Digite suas queries SQL (ou 'sair').")
+    print("Para queries multi-linha, termine com ';' em uma linha sozinho.")
 
     while True:
-        query = input("\nSQL> ")
-        if query.lower() == 'sair': break
+        lines = []
+        print("\nSQL> ", end='')
+        while True:
+            line = input()
+            if line.lower() == 'sair':
+                return
+            if line.strip() == ';':
+                break
+            lines.append(line)
+            if not lines[0]:  # Se primeira linha vazia, sai do loop
+                break
+            print("...> ", end='')
+        
+        query = '\n'.join(lines).strip()
+        if not query:
+            continue
 
         result = send_query(query)
 
