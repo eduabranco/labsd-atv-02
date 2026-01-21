@@ -124,21 +124,18 @@ def save_config(
 
     DB_CONFIG = {{
         "user": "{user}",
-        "password": "{password if password else ""}",
+        "password": "{password or ""}",
         "host": "127.0.0.1",
-        "database": "{db_name}"
-    }}
+        "database": "{db_name}",
     """
 
     if socket_path:
         # Insert socket path before closing brace
-        config_content = config_content.replace(
-            f"    \"database\": \"{db_name}\"\n}}",
-            f"    \"database\": \"{db_name}\",\n    \"unix_socket\": \"{socket_path}\"\n}}"
-        )
+        config_content += f"""    "unix_socket": "{socket_path}"\n"""
 
-    with open('config_db.py', 'w') as f:
-        f.write(config_content)
+    config_content += "}}"
+
+    with open('config_db.py', 'w') as f: f.write(config_content)
 
     print(f"[✓] Configuration saved to config_db.py")
 
