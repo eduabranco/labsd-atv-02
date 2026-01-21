@@ -55,12 +55,27 @@ def main():
             continue
 
         if result.get('status') == 'success':
-            print(f"[Sucesso] Executado no Nó: {result.get('node')}")
-            if 'data' in result:
-                print("Dados:", result['data'])
+            print(f"\n[✓ Sucesso] Executado no Nó: {result.get('node')}")
+            
+            # Exibir dados se existirem
+            if 'data' in result and result['data']:
+                data = result['data']
+                if isinstance(data, list) and len(data) > 0:
+                    print(f"\n📊 Resultados ({len(data)} linhas):")
+                    for idx, row in enumerate(data, 1):
+                        print(f"  [{idx}] {row}")
+                elif isinstance(data, str):
+                    print(f"Resultado: {data}")
+                else:
+                    print(f"Dados: {data}")
+            
+            # Exibir informações adicionais (2PC)
             if 'msg' in result:
-                print("Msg:", result['msg'])
+                print(f"💬 Info: {result['msg']}")
+            
+            if 'nodes' in result:
+                print(f"📍 Nós envolvidos: {result['nodes']}")
         else:
-            print(f"[Erro] {result.get('msg')}")
+            print(f"\n[✗ Erro] {result.get('msg', 'Erro desconhecido')}")
 
 if __name__ == "__main__": main()

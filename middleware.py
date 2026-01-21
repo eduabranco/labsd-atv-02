@@ -344,7 +344,7 @@ class DDBNode:
                 # O Líder não respondeu neste ciclo
                 self.start_election()
 
-            sleep(5)
+            sleep(300)  # 5 minutos entre heartbeats
 
 # --- ENTRY POINT ---
 if __name__ == "__main__":
