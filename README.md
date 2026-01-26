@@ -5,17 +5,21 @@ Sistema de banco de dados distribuído com replicação automática, eleição d
 ## Quick Start
 
 ### 1. Instalar Dependências
+
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 2. Configurar MySQL
+
 ```bash
 python3 db_setup.py  # Auto-detecta configuração e cria banco/tabelas
 ```
 
 ### 3. Configurar Nós
+
 Edite [config.py](config.py):
+
 ```python
 NODES = {
     1: ('192.168.1.10', 5001),
@@ -29,6 +33,7 @@ CONSISTENT_READS = False  # True = leituras via líder (slower, mais consistente
 ```
 
 ### 4. Iniciar Sistema
+
 ```bash
 python middleware.py 1  # Terminal 1
 python middleware.py 2  # Terminal 2
@@ -76,11 +81,13 @@ SQL> DELETE FROM usuarios WHERE id = 1;
 ## Solução de Problemas
 
 **Erro MySQL Access Denied:**
+
 ```bash
 python3 db_setup.py  # Re-executa auto-detecção
 ```
 
 **Nós não se comunicam:**
+
 - Verifique IPs em [config.py](config.py)
 - Teste: `ping <IP_DO_NÓ>`
 - Libere portas: `sudo ufw allow 5001:5003/tcp`
@@ -91,5 +98,3 @@ python3 db_setup.py  # Re-executa auto-detecção
 - [client.py](client.py) - Cliente SQL
 - [config.py](config.py) - Configuração de rede
 - [db_setup.py](db_setup.py) - Setup automático MySQL
-
-

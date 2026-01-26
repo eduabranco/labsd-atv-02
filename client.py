@@ -189,6 +189,16 @@ def main():
                 # For INSERT/UPDATE/DELETE operations
                 msg = result.get('msg', 'Query OK')
                 print(f"{msg} ({elapsed_time:.2f} sec)")
+            
+            # REQUISITO #16: Mostrar nó que executou a query
+            executed_node = result.get('node')
+            if executed_node is not None:
+                print(f"[Executed on Node: {executed_node}]")
+            
+            # Se foi replicado em múltiplos nós (2PC), mostrar todos
+            replicated_nodes = result.get('nodes')
+            if replicated_nodes:
+                print(f"[Replicated to Nodes: {', '.join(map(str, replicated_nodes))}]")
         else:
             error_msg = result.get('msg', 'Unknown error')
             print(f"ERROR: {error_msg}")

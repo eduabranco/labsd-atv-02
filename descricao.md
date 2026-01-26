@@ -2,12 +2,12 @@
 
 Desenvolver um middleware para disponibilizar um banco de dados distribuídos baseado no SGBD MySQL. O middleware deverá ser desenvolvido baseado nas seguintes premissas:
 
-1. Pode ser desenvolvido em qualquer linguagem de programação;
+1. Deve ser desenvolvido em Python;
 2. Deverá ser executado em pelo menos 03 máquinas diferentes;
 3. Usar o SGBD MySQL;
 4. A comunicação entre os nós do banco de dados distribuídos deverá ocorrer através de sockets;
 5. Desenvolver protocolo para troca de informações entre as diversas máquinas;
-6. Possibilidade de configurar os nós do DDB através de IPs de cada m´quina;
+6. Possibilidade de configurar os nós do DDB através de IPs de cada máquina;
 7. O DDB deverá seguir as premissas de uma DDM homogêneo autônomo;
 8. Todas as alterações efetuadas em um dos nós do DDB deverá ser replicada em todos os outros nós da rede;
 9. Preferencialmente poderá ter um coordenador. Porém, caso o coordenador falhe, deverá ter algum algoritmo para a eleição de um novo coordenador;

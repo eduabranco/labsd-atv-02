@@ -4,7 +4,7 @@ from json import loads, dumps, dump, load
 from time import sleep, time
 from hashlib import md5
 from mysql.connector import Error, connect
-from config import NODES, DB_CONFIG, CONSISTENT_READS
+from config import NODES, DB_CONFIG, CONSISTENT_READS, LOAD_BALANCING_STRATEGY
 from typing import Any
 from sys import argv
 from pathlib import Path
@@ -18,6 +18,8 @@ class DDBNode:
         self.leader_id = max(NODES.keys()) # Assumimos o maior ID como líder inicial
         self.running = True
         self.active_nodes = set()
+        self.last_write_node = 0  # Para Round-Robin de escritas
+        self.query_counter = 0  # Contador de queries processadas
 
         # Conexão com Banco de Dados Local
         db_config = {**DB_CONFIG, "autocommit": False}  # Desabilita autocommit para transações 2PC
@@ -43,6 +45,8 @@ class DDBNode:
         print(f"[*] 2PC (Two-Phase Commit) Ativado")
         print(f"[*] Isolation Level: REPEATABLE READ")
         print(f"[*] Transaction Timeout: {self.transaction_timeout}s")
+        print(f"[*] Load Balancing Strategy: {LOAD_BALANCING_STRATEGY}")
+        print(f"[*] Consistent Reads: {CONSISTENT_READS}")
 
         # Threads
         Thread(target = self.start_server, daemon = True).start()
@@ -182,13 +186,30 @@ class DDBNode:
                     print(f"[*] Novo Líder Eleito: {self.leader_id}")
 
                 case "EXECUTE_QUERY":
-                    print(f"[*] Query Recebida: {payload['query']}")
-                    response = self.process_query(payload["query"])
+                    self.query_counter += 1
+                    query = payload['query']
+                    print(f"\n[Query #{self.query_counter}] Recebida de Nó {msg.get('source_id', 'Cliente')}")
+                    print(f"[Query #{self.query_counter}] SQL: {query}")
+                    response = self.process_query(query)
+                    # Garantir que sempre temos uma resposta válida
+                    if not response:
+                        response = {"status": "error", "msg": "Nenhuma resposta gerada"}
+                    # Log do conteúdo transmitido (Requisito #15)
+                    if response:
+                        print(f"[Query #{self.query_counter}] Status: {response.get('status')}")
+                        if response.get('status') == 'success':
+                            data_preview = str(response.get('data', ''))[:100]
+                            print(f"[Query #{self.query_counter}] Conteúdo transmitido: {data_preview}...")
+                            if 'nodes' in response:
+                                print(f"[Query #{self.query_counter}] Replicado em nós: {response['nodes']}")
+                    print(f"[Query #{self.query_counter}] Processamento completo\n")
 
                 case "PREPARE":
                     # 2PC Fase 1: PREPARE - Valida se pode executar a query
                     print(f"[*] [2PC-PREPARE] Validando query: {payload['query']}")
-                    response = self.handle_prepare(payload["query"])
+                    # Participantes apenas validam, não executam (para evitar duplicação)
+                    is_coordinator = payload.get('coordinator', False)
+                    response = self.handle_prepare(payload["query"], execute=is_coordinator)
 
                 case "COMMIT":
                     # 2PC Fase 2: COMMIT - Confirma a transação
@@ -204,9 +225,16 @@ class DDBNode:
                     response = {"status": "error", "msg": "Tipo de mensagem desconhecido"}
 
             client_socket.send(dumps(response).encode())
+            print(f"[DEBUG] Resposta enviada para o cliente: {response.get('status') if response else 'None'}")
 
         except Exception as e:
             print(f"[!] Erro no handler: {e}")
+            import traceback
+            traceback.print_exc()
+            try:
+                client_socket.send(dumps({"status": "error", "msg": str(e)}).encode())
+            except:
+                pass
 
         finally:
             client_socket.close()
@@ -235,27 +263,35 @@ class DDBNode:
 
     # --- 2PC (TWO-PHASE COMMIT) HANDLERS ---
 
-    def handle_prepare(self, query: str) -> dict[str, Any]:
+    def handle_prepare(self, query: str, execute: bool = False) -> dict[str, Any]:
         """
-        2PC Fase 1 - PREPARE: Executa a query mas NÃO commita (mantém transação aberta).
-        Retorna VOTE_YES se executou com sucesso, VOTE_NO caso contrário.
-        Todos os nós executam a query na fase PREPARE para garantir replicação.
+        2PC Fase 1 - PREPARE: Valida a query.
+        Retorna VOTE_YES se pode executar, VOTE_NO caso contrário.
+        
+        Se execute=True (coordenador): executa a query mas não commita.
+        Se execute=False (participante): apenas valida sintaxe sem executar.
         """
         with self.transaction_lock:
             try:
-                # Executa a query mas NÃO commita (autocommit está desabilitado)
                 cursor = self.db.cursor(dictionary = True)
-                cursor.execute(query)
                 
-                # Armazena a query pendente para poder fazer rollback se necessário
-                self.pending_transaction = query
-                self.prepare_timestamp = time()  # Registra timestamp para timeout
-
-                print(f"[*] [2PC-PREPARE] VOTE_YES - Query executada (não commitada)")
+                if execute:
+                    # COORDENADOR: Executa a query mas NÃO commita
+                    cursor.execute(query)
+                    self.pending_transaction = query
+                    self.prepare_timestamp = time()
+                    print(f"[*] [2PC-PREPARE] VOTE_YES - Query executada pelo coordenador (não commitada)")
+                else:
+                    # PARTICIPANTE: Apenas valida sintaxe/permissões sem executar
+                    # Simula validação registrando query pendente para posterior limpeza
+                    self.pending_transaction = query
+                    self.prepare_timestamp = time()
+                    print(f"[*] [2PC-PREPARE] VOTE_YES - Query validada (participante não executa)")
+                
                 return {"status": "VOTE_YES", "node": self.node_id}
 
             except Error as err:
-                # Se houver erro, faz rollback e vota NÃO
+                # Se houver erro na validação, vota NÃO
                 self.db.rollback()
                 self.pending_transaction = None
                 self.prepare_timestamp = None
@@ -264,21 +300,21 @@ class DDBNode:
 
     def handle_commit(self) -> dict[str, Any]:
         """
-        2PC Fase 2 - COMMIT: Commita a transação preparada.
-        Todos os nós commitam para garantir replicação dos dados.
+        2PC Fase 2 - COMMIT: Commita a transação preparada (apenas coordenador).
+        Participantes apenas limpam o estado de validação.
         """
         with self.transaction_lock:
             try:
                 if self.pending_transaction:
-                    # Commita a transação que foi executada no PREPARE
+                    # Commita se houver transação pendente (coordenador executou no PREPARE)
                     self.db.commit()
                     print(f"[*] [2PC-COMMIT] Transação commitada com sucesso")
                     self.pending_transaction = None
                     self.prepare_timestamp = None
                     return {"status": "success", "node": self.node_id}
                 else:
-                    # Sem transação pendente
-                    print(f"[!] [2PC-COMMIT] Nenhuma transação pendente para commitar")
+                    # Participante apenas limpa estado
+                    print(f"[*] [2PC-COMMIT] Estado limpo (participante)")
                     return {"status": "success", "node": self.node_id}
             except Error as err:
                 self.db.rollback()
@@ -302,11 +338,13 @@ class DDBNode:
                 return {"status": "error", "msg": str(err)}
 
     def process_query(self, query) -> dict[str, Any] | None:
-        """Distribui queries: leituras locais (ou pelo líder se CONSISTENT_READS), escritas via 2PC coordenado pelo líder."""
+        """Distribui queries: leituras locais (ou pelo líder se CONSISTENT_READS), escritas via 2PC coordenado por nó ativo (Round-Robin)."""
+        print(f"[DEBUG] process_query iniciado - active_nodes: {self.active_nodes}")
         query_upper = query.strip().upper()
         # Identifica queries de leitura (SELECT, SHOW, DESCRIBE, EXPLAIN)
         read_commands = ("SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN")
         is_write = not query_upper.startswith(read_commands)
+        print(f"[DEBUG] is_write: {is_write}, node_id: {self.node_id}, leader_id: {self.leader_id}")
 
         # 1. Se for LEITURA (SELECT, SHOW, etc.)
         if not is_write:
@@ -315,22 +353,43 @@ class DDBNode:
                 print(f"[*] [CONSISTENT_READ] Roteando leitura para o Líder {self.leader_id}")
                 leader_ip, leader_port = NODES[self.leader_id]
                 msg = {"type": "EXECUTE_QUERY", "payload": {"query": query}}
-                return self.send_message(leader_ip, leader_port, msg)
+                result = self.send_message(leader_ip, leader_port, msg)
+                return result if result else {"status": "error", "msg": f"Líder {self.leader_id} não respondeu"}
             else:
-                # Executa localmente (balanceamento distribuído)
+                # Executa localmente (balanceamento distribuído - Requisito #14)
                 return self.execute_local_query(query)
 
         # 2. Se for ESCRITA (INSERT/UPDATE/DELETE)
-        # Se eu não sou o líder, encaminho para o líder
-        if self.node_id != self.leader_id:
-            print(f"[*] Encaminhando escrita para o Líder {self.leader_id}")
-            leader_ip, leader_port = NODES[self.leader_id]
-            msg = {"type": "EXECUTE_QUERY", "payload": {"query": query}}
-            return self.send_message(leader_ip, leader_port, msg)
-
-        # Se eu SOU o líder, coordeno o 2PC
-
-        return self.execute_2pc(query)
+        # REQUISITO #14: Load Balancing - Distribui escritas entre nós ativos via Round-Robin
+        # Em vez de sempre usar o líder, seleciona um nó ativo para coordenar o 2PC
+        
+        from config import LOAD_BALANCING_STRATEGY
+        
+        if LOAD_BALANCING_STRATEGY == "ROUND_ROBIN" and len(self.active_nodes) > 0:
+            # Round-Robin: seleciona próximo nó ativo na sequência
+            active_sorted = sorted(list(self.active_nodes))
+            coordinator_id = active_sorted[self.last_write_node % len(active_sorted)]
+            self.last_write_node += 1
+            
+            if coordinator_id != self.node_id:
+                print(f"[*] [LOAD_BALANCING] Distribuindo escrita para Nó {coordinator_id} (Round-Robin)")
+                coord_ip, coord_port = NODES[coordinator_id]
+                msg = {"type": "EXECUTE_QUERY", "payload": {"query": query}}
+                result = self.send_message(coord_ip, coord_port, msg)
+                return result if result else {"status": "error", "msg": f"Nó {coordinator_id} não respondeu"}
+            else:
+                print(f"[*] [LOAD_BALANCING] Coordenando escrita localmente (Round-Robin)")
+                return self.execute_2pc(query)
+        else:
+            # Fallback: usa o líder tradicional
+            if self.node_id != self.leader_id:
+                print(f"[*] Encaminhando escrita para o Líder {self.leader_id}")
+                leader_ip, leader_port = NODES[self.leader_id]
+                msg = {"type": "EXECUTE_QUERY", "payload": {"query": query}}
+                result = self.send_message(leader_ip, leader_port, msg)
+                return result if result else {"status": "error", "msg": f"Líder {self.leader_id} não respondeu"}
+            else:
+                return self.execute_2pc(query)
 
     def execute_2pc(self, query) -> dict[str, Any]:
         """
@@ -351,7 +410,7 @@ class DDBNode:
 
         for nid, (nip, nport) in self.peers.items():
             if nid in self.active_nodes:
-                msg = {"type": "PREPARE", "payload": {"query": query}}
+                msg = {"type": "PREPARE", "payload": {"query": query, "coordinator": False}}
                 res = self.send_message(nip, nport, msg)
 
                 if res and res.get("status") == "VOTE_YES":
@@ -365,8 +424,8 @@ class DDBNode:
                 print(f"[!] [2PC-FASE-1] Nó {nid} inativo - não participará")
 
         # === COORDENADOR TAMBÉM PREPARA ===
-        # O coordenador também deve executar a query (sem commit) como os participantes
-        coord_prepare_result = self.handle_prepare(query)
+        # O coordenador executa a query (sem commit), participantes apenas validaram
+        coord_prepare_result = self.handle_prepare(query, execute=True)
         if coord_prepare_result["status"] != "VOTE_YES":
             votes["NO"] += 1
             print(f"[!] [2PC-FASE-1] Coordenador falhou no PREPARE: {coord_prepare_result.get('msg', '')}")

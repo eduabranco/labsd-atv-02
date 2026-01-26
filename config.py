@@ -1,8 +1,19 @@
-# Configuração dos Nós (ID: (IP, PORTA))
-# IDs devem ser únicos. Nó com maior ID é líder inicial.
+# ========================================================================
+# CONFIGURAÇÃO DO BANCO DE DADOS DISTRIBUÍDO (DDB)
+# ========================================================================
+# Este arquivo configura os nós do sistema de banco de dados distribuído
+# baseado em MySQL com replicação via Two-Phase Commit (2PC)
 
 from os.path import exists
 from os import getenv
+
+# ------------------------------------------------------------------------
+# CONFIGURAÇÃO DOS NÓS (Requisito #6: Configuração via IPs)
+# ------------------------------------------------------------------------
+# Formato: {ID: (IP, PORTA)}
+# - IDs devem ser únicos e inteiros positivos
+# - O nó com MAIOR ID é o líder inicial (Algoritmo Bully)
+# - Para produção, substitua 127.0.0.1 pelos IPs reais das máquinas
 
 NODES: dict[int, tuple[str, int]] = {
     1: ("127.0.0.1", 5001), # Máquina 1
@@ -10,11 +21,40 @@ NODES: dict[int, tuple[str, int]] = {
     3: ("127.0.0.1", 5003)  # Máquina 3
 }
 
-# Configurações ACID
-# CONSISTENT_READS: Se True, queries SELECT também são roteadas pelo líder para garantir
-# leitura dos dados mais recentes (stronger consistency, menor performance)
-# Se False, leituras são executadas localmente (eventual consistency, melhor performance)
-CONSISTENT_READS = False  # Altere para True se precisar de leituras fortemente consistentes
+# ------------------------------------------------------------------------
+# TIPO DE COMUNICAÇÃO (Requisito #10)
+# ------------------------------------------------------------------------
+# O sistema utiliza os seguintes padrões de comunicação:
+# 
+# 1. UNICAST: Comunicação ponto-a-ponto entre nós específicos
+#    - Usado para: 2PC (PREPARE/COMMIT/ABORT), queries direcionadas, eleição
+#    - Implementado via: Socket TCP direto
+#
+# 2. BROADCAST (emulado via múltiplos UNICAST):
+#    - Usado para: Heartbeat, notificação de vitória em eleição
+#    - Implementado via: Loop enviando para todos os nós conhecidos
+#
+# 3. MULTICAST: Não implementado (broadcast emulado é suficiente para a escala)
+#
+COMMUNICATION_TYPE = "UNICAST_WITH_BROADCAST_EMULATION"  # Tipo predominante
+
+# ------------------------------------------------------------------------
+# CONFIGURAÇÕES DE CONSISTÊNCIA E ACID (Requisitos #11 e #14)
+# ------------------------------------------------------------------------
+
+# CONSISTENT_READS: Controla consistência de leituras (Requisito #11)
+# - True: Queries SELECT roteadas pelo líder (strong consistency)
+#         Garante leitura dos dados mais recentes, menor performance
+# - False: Leituras executadas localmente (eventual consistency)
+#          Melhor performance e balanceamento de carga (Requisito #14)
+CONSISTENT_READS = False
+
+# LOAD_BALANCING_STRATEGY: Estratégia de distribuição de carga (Requisito #14)
+# Opções: "ROUND_ROBIN", "RANDOM", "LEAST_LOADED"
+# - ROUND_ROBIN: Distribui requisições sequencialmente entre nós ativos
+# - RANDOM: Seleciona nó aleatório (implementado no cliente atual)
+# - LEAST_LOADED: Futura implementação com métricas de carga
+LOAD_BALANCING_STRATEGY = "ROUND_ROBIN"
 
 # Database Configuration with multiple fallback options
 # Priority: 1. Environment variables, 2. config_db.py (auto-generated), 3. Default values
