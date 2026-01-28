@@ -1,5 +1,4 @@
 # Python
-.select * from usutarios;venv
 venv/
 env/
 __pycache__/

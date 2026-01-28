@@ -77,7 +77,7 @@ class DDBNode:
         except Exception as e:
             print(f"[!] [RECOVERY] Erro na recuperação: {e}")
 
-    def log_transaction_state(self, query: str, status: str, nodes: list[int] = None) -> None:
+    def log_transaction_state(self, query: str, status: str, nodes: list[int] | None = None) -> None:
         """Registra estado da transação para recuperação em caso de falha."""
         try:
             log_entry = {
@@ -362,8 +362,6 @@ class DDBNode:
         # 2. Se for ESCRITA (INSERT/UPDATE/DELETE)
         # REQUISITO #14: Load Balancing - Distribui escritas entre nós ativos via Round-Robin
         # Em vez de sempre usar o líder, seleciona um nó ativo para coordenar o 2PC
-        
-        from config import LOAD_BALANCING_STRATEGY
         
         if LOAD_BALANCING_STRATEGY == "ROUND_ROBIN" and len(self.active_nodes) > 0:
             # Round-Robin: seleciona próximo nó ativo na sequência
