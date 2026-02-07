@@ -245,12 +245,37 @@ class DDBNode:
         query: str,
         commit: bool = True
     ) -> dict[str, Any]:
-        """Executa no MySQL Local."""
+        """Executa no MySQL Local com validação de segurança."""
         try:
+            # SECURITY: Validate query to prevent dangerous operations on system databases
+            query_upper = query.strip().upper()
+            
+            # Block operations that could affect system databases
+            dangerous_patterns = [
+                "DROP DATABASE MYSQL",
+                "DROP DATABASE INFORMATION_SCHEMA",
+                "DROP DATABASE PERFORMANCE_SCHEMA",
+                "DROP DATABASE SYS",
+                "USE MYSQL",
+                "USE INFORMATION_SCHEMA",
+                "USE PERFORMANCE_SCHEMA",
+                "USE SYS",
+                "DELETE FROM MYSQL.",
+                "DROP TABLE MYSQL.",
+                "TRUNCATE MYSQL."
+            ]
+            
+            for pattern in dangerous_patterns:
+                if pattern in query_upper:
+                    print(f"[!] SECURITY: Blocked dangerous query: {query[:100]}")
+                    return {"status": "error", "msg": "Operation blocked: Cannot modify system databases"}
+            
+            # Ensure we're using the correct database
             cursor = self.db.cursor(dictionary = True)
+            cursor.execute(f"USE {DB_CONFIG['database']}")
+            
             cursor.execute(query)
             # Queries que retornam dados
-            query_upper = query.strip().upper()
             read_commands = ("SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN")
             if query_upper.startswith(read_commands):
                 res = cursor.fetchall()
@@ -276,6 +301,8 @@ class DDBNode:
                 cursor = self.db.cursor(dictionary = True)
                 
                 if execute:
+                    # Ensure we're using the correct database before executing
+                    cursor.execute(f"USE {DB_CONFIG['database']}")
                     # COORDENADOR: Executa a query mas NÃO commita
                     cursor.execute(query)
                     self.pending_transaction = query

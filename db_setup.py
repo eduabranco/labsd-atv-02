@@ -30,7 +30,9 @@ def try_connect(
 
         return connect(**config)
 
-    except Error as e: return
+    except Error as e:
+        # Silently return None on connection failure (expected during auto-detection)
+        return None
 
 def detect_mysql_connection(
 ) -> tuple[PooledMySQLConnection | MySQLConnectionAbstract | None, str | None, str | None, str | None]:
@@ -67,8 +69,8 @@ def detect_mysql_connection(
 def create_database_and_user(
     conn: PooledMySQLConnection | MySQLConnectionAbstract,
     db_name: str = 'dist_db',
-    app_user: str = 'ddb_user',
-    app_password: str = 'ddb_pass'
+    app_user: str = 'aluno',
+    app_password: str = 'aluno'
 ) -> bool:
     """Cria banco de dados, usuário dedicado e tabela inicial com privilégios apropriados."""
     cursor = conn.cursor()
@@ -81,15 +83,15 @@ def create_database_and_user(
 
         # Create dedicated user
         print(f"[*] Creating user '{app_user}'@'localhost'...")
-        cursor.execute(f"DROP USER IF EXISTS '{app_user}'@'localhost'")
+        #cursor.execute(f"DROP USER IF EXISTS '{app_user}'@'localhost'")
         cursor.execute(f"CREATE USER '{app_user}'@'localhost' IDENTIFIED BY '{app_password}'")
         print(f"[✓] User '{app_user}' created successfully")
 
         # Grant privileges
-        print(f"[*] Granting privileges to '{app_user}'...")
-        cursor.execute(f"GRANT ALL PRIVILEGES ON {db_name}.* TO '{app_user}'@'localhost'")
-        cursor.execute("FLUSH PRIVILEGES")
-        print(f"[✓] Privileges granted successfully")
+        # print(f"[*] Granting privileges to '{app_user}'...")
+        # cursor.execute(f"GRANT ALL PRIVILEGES ON {db_name}.* TO '{app_user}'@'localhost'")
+        # cursor.execute("FLUSH PRIVILEGES")
+        # print(f"[✓] Privileges granted successfully")
 
         # Create table
         print(f"[*] Creating table 'usuarios'...")
